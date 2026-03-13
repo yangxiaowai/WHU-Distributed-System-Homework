@@ -1,0 +1,26 @@
+spring:
+  application:
+    name: seckill-user-service
+
+  datasource:
+    url: jdbc:mysql://localhost:3306/seckill?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai
+    username: root
+    password: your_password
+    driver-class-name: com.mysql.cj.jdbc.Driver
+
+  mvc:
+    pathmatch:
+      matching-strategy: ant_path_matcher
+
+mybatis:
+  mapper-locations: classpath:mapper/*.xml
+  type-aliases-package: com.example.seckill.user.domain
+
+server:
+  port: 8080
+
+# 简化安全配置：先允许所有请求通过，后续可扩展为真正的鉴权
+logging:
+  level:
+    org.springframework.security: warn
+
