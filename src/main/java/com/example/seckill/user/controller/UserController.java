@@ -5,7 +5,6 @@ import com.example.seckill.user.dto.LoginRequest;
 import com.example.seckill.user.dto.RegisterRequest;
 import com.example.seckill.user.service.UserService;
 import jakarta.validation.Valid;
-import lombok.Data;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -34,11 +33,34 @@ public class UserController {
         return ApiResponse.success(token);
     }
 
-    @Data
     public static class ApiResponse<T> {
         private int code;
         private String msg;
         private T data;
+
+        public int getCode() {
+            return code;
+        }
+
+        public void setCode(int code) {
+            this.code = code;
+        }
+
+        public String getMsg() {
+            return msg;
+        }
+
+        public void setMsg(String msg) {
+            this.msg = msg;
+        }
+
+        public T getData() {
+            return data;
+        }
+
+        public void setData(T data) {
+            this.data = data;
+        }
 
         public static <T> ApiResponse<T> success(T data) {
             ApiResponse<T> resp = new ApiResponse<>();

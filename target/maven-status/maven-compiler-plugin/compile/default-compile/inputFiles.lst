@@ -1,0 +1,13 @@
+/Users/yangjun/study/本科课程/分布式软件原理与技术/作业/seckill-system/src/main/java/com/example/seckill/SeckillApplication.java
+/Users/yangjun/study/本科课程/分布式软件原理与技术/作业/seckill-system/src/main/java/com/example/seckill/config/RedisConfig.java
+/Users/yangjun/study/本科课程/分布式软件原理与技术/作业/seckill-system/src/main/java/com/example/seckill/config/SecurityConfig.java
+/Users/yangjun/study/本科课程/分布式软件原理与技术/作业/seckill-system/src/main/java/com/example/seckill/product/controller/ProductController.java
+/Users/yangjun/study/本科课程/分布式软件原理与技术/作业/seckill-system/src/main/java/com/example/seckill/product/domain/Product.java
+/Users/yangjun/study/本科课程/分布式软件原理与技术/作业/seckill-system/src/main/java/com/example/seckill/product/mapper/ProductMapper.java
+/Users/yangjun/study/本科课程/分布式软件原理与技术/作业/seckill-system/src/main/java/com/example/seckill/product/service/ProductService.java
+/Users/yangjun/study/本科课程/分布式软件原理与技术/作业/seckill-system/src/main/java/com/example/seckill/user/controller/UserController.java
+/Users/yangjun/study/本科课程/分布式软件原理与技术/作业/seckill-system/src/main/java/com/example/seckill/user/domain/User.java
+/Users/yangjun/study/本科课程/分布式软件原理与技术/作业/seckill-system/src/main/java/com/example/seckill/user/dto/LoginRequest.java
+/Users/yangjun/study/本科课程/分布式软件原理与技术/作业/seckill-system/src/main/java/com/example/seckill/user/dto/RegisterRequest.java
+/Users/yangjun/study/本科课程/分布式软件原理与技术/作业/seckill-system/src/main/java/com/example/seckill/user/mapper/UserMapper.java
+/Users/yangjun/study/本科课程/分布式软件原理与技术/作业/seckill-system/src/main/java/com/example/seckill/user/service/UserService.java

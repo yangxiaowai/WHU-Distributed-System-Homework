@@ -12,6 +12,13 @@ spring:
     pathmatch:
       matching-strategy: ant_path_matcher
 
+  data:
+    redis:
+      host: redis
+      port: 6379
+      # 作业环境中使用默认 0 号库
+      database: 0
+
 mybatis:
   mapper-locations: classpath:mapper/*.xml
   type-aliases-package: com.example.seckill.user.domain
@@ -19,8 +26,8 @@ mybatis:
 server:
   port: 8080
 
-# 简化安全配置：先允许所有请求通过，后续可扩展为真正的鉴权
 logging:
   level:
     org.springframework.security: warn
+    com.example.seckill: info
 
