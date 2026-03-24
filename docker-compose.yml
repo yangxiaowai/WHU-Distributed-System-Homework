@@ -1,18 +1,55 @@
-version: "3.9"
-
 services:
-  mysql:
+  mysql-primary:
     image: mysql:8.0
-    container_name: seckill-mysql
+    container_name: seckill-mysql-primary
     environment:
       MYSQL_ROOT_PASSWORD: root
       MYSQL_DATABASE: seckill
     ports:
       - "3306:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-proot"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
     volumes:
-      - ./sql/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./sql/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+      - ./mysql/primary/01-create-repl-user.sql:/docker-entrypoint-initdb.d/02-create-repl-user.sql:ro
     command:
-      --default-authentication-plugin=mysql_native_password
+      - --default-authentication-plugin=mysql_native_password
+      - --server-id=1
+      - --log-bin=mysql-bin
+      - --binlog_format=ROW
+      - --gtid_mode=ON
+      - --enforce_gtid_consistency=ON
+    networks:
+      - seckill-net
+
+  mysql-replica:
+    image: mysql:8.0
+    container_name: seckill-mysql-replica
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: seckill
+    ports:
+      - "3307:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-proot"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    depends_on:
+      mysql-primary:
+        condition: service_healthy
+    volumes:
+      - ./mysql/replica/01-setup-replication.sh:/docker-entrypoint-initdb.d/02-setup-replication.sh:ro
+    command:
+      - --default-authentication-plugin=mysql_native_password
+      - --server-id=2
+      - --relay-log=relay-bin
+      - --read-only=ON
+      - --gtid_mode=ON
+      - --enforce_gtid_consistency=ON
     networks:
       - seckill-net
 
@@ -28,12 +65,19 @@ services:
     build: .
     container_name: seckill-app-1
     environment:
-      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/seckill?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai
-      SPRING_DATASOURCE_USERNAME: root
-      SPRING_DATASOURCE_PASSWORD: root
+      SPRING_DATASOURCE_WRITE_URL: jdbc:mysql://mysql-primary:3306/seckill?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai
+      SPRING_DATASOURCE_WRITE_USERNAME: root
+      SPRING_DATASOURCE_WRITE_PASSWORD: root
+      SPRING_DATASOURCE_READ_URL: jdbc:mysql://mysql-replica:3306/seckill?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai
+      SPRING_DATASOURCE_READ_USERNAME: root
+      SPRING_DATASOURCE_READ_PASSWORD: root
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: 6379
+      SECKILL_SEARCH_ES_BASE_URL: http://elasticsearch:9200
       SERVER_PORT: 8081
     depends_on:
-      - mysql
+      - mysql-primary
+      - mysql-replica
       - redis
     ports:
       - "8081:8081"
@@ -44,12 +88,19 @@ services:
     build: .
     container_name: seckill-app-2
     environment:
-      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/seckill?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai
-      SPRING_DATASOURCE_USERNAME: root
-      SPRING_DATASOURCE_PASSWORD: root
+      SPRING_DATASOURCE_WRITE_URL: jdbc:mysql://mysql-primary:3306/seckill?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai
+      SPRING_DATASOURCE_WRITE_USERNAME: root
+      SPRING_DATASOURCE_WRITE_PASSWORD: root
+      SPRING_DATASOURCE_READ_URL: jdbc:mysql://mysql-replica:3306/seckill?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai
+      SPRING_DATASOURCE_READ_USERNAME: root
+      SPRING_DATASOURCE_READ_PASSWORD: root
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: 6379
+      SECKILL_SEARCH_ES_BASE_URL: http://elasticsearch:9200
       SERVER_PORT: 8082
     depends_on:
-      - mysql
+      - mysql-primary
+      - mysql-replica
       - redis
     ports:
       - "8082:8082"
@@ -70,7 +121,24 @@ services:
     networks:
       - seckill-net
 
+  # 可选：商品搜索（Elasticsearch）
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.13.4
+    container_name: seckill-elasticsearch
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+    ports:
+      - "9200:9200"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9200 >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    networks:
+      - seckill-net
+
 networks:
   seckill-net:
     driver: bridge
-

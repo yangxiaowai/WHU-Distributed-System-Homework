@@ -1,27 +1,43 @@
 package com.example.seckill.product.service;
 
+import com.example.seckill.config.datasource.ReadOnly;
 import com.example.seckill.product.domain.Product;
 import com.example.seckill.product.mapper.ProductMapper;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.dao.DataAccessException;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
-import java.util.Random;
+import java.util.Collections;
+import java.util.List;
+import java.util.UUID;
+import java.util.concurrent.ThreadLocalRandom;
 
 @Service
 public class ProductService {
 
     private static final String PRODUCT_CACHE_KEY_PREFIX = "product:detail:";
+    private static final String PRODUCT_CACHE_LOCK_KEY_PREFIX = "product:detail:lock:";
     private static final String PRODUCT_NULL_VALUE = "NULL";
+    private static final Duration PRODUCT_CACHE_TTL = Duration.ofMinutes(30);
+    private static final Duration NULL_CACHE_TTL = Duration.ofMinutes(2);
+    private static final Duration LOCK_TTL = Duration.ofSeconds(5);
+    private static final long PRODUCT_CACHE_JITTER_SECONDS = 300;
+    private static final long NULL_CACHE_JITTER_SECONDS = 30;
+    private static final int CACHE_RETRY_TIMES = 5;
+    private static final long CACHE_RETRY_SLEEP_MILLIS = 40;
+    private static final DefaultRedisScript<Long> RELEASE_LOCK_SCRIPT = new DefaultRedisScript<>(
+            "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
+            Long.class
+    );
 
     private final ProductMapper productMapper;
     private final StringRedisTemplate redisTemplate;
     private final ObjectMapper objectMapper;
-    private final Random random = new Random();
 
     public ProductService(ProductMapper productMapper,
                           StringRedisTemplate redisTemplate,
@@ -31,90 +47,174 @@ public class ProductService {
         this.objectMapper = objectMapper;
     }
 
+    @ReadOnly
     public Product getProductById(Long id) {
-        String cacheKey = PRODUCT_CACHE_KEY_PREFIX + id;
-        ValueOperations<String, String> ops = redisTemplate.opsForValue();
+        if (id == null || id <= 0) {
+            return null;
+        }
+        String cacheKey = buildProductCacheKey(id);
+        CacheLookupResult cacheLookup = readFromCache(cacheKey);
+        if (cacheLookup.present()) {
+            return cacheLookup.product();
+        }
 
-        // 1. 先查缓存（Cache Aside 读路径）
-        String cacheValue = ops.get(cacheKey);
-        if (cacheValue != null) {
-            if (PRODUCT_NULL_VALUE.equals(cacheValue)) {
-                // 缓存穿透保护：数据库中不存在的数据直接返回 null
-                return null;
-            }
+        String lockKey = buildLockKey(id);
+        String lockValue = UUID.randomUUID().toString();
+
+        if (tryAcquireLock(lockKey, lockValue)) {
             try {
-                return objectMapper.readValue(cacheValue, Product.class);
-            } catch (JsonProcessingException ignored) {
-                // 反序列化失败则降级走数据库
+                CacheLookupResult secondLookup = readFromCache(cacheKey);
+                if (secondLookup.present()) {
+                    return secondLookup.product();
+                }
+                return loadFromDatabaseAndCache(id, cacheKey);
+            } finally {
+                releaseLock(lockKey, lockValue);
             }
         }
 
-        // 2. 使用简单的分布式锁处理热点 Key 缓存击穿
-        String lockKey = cacheKey + ":lock";
-        boolean lockAcquired = false;
+        return waitForCacheRebuild(cacheKey, id);
+    }
+
+    @ReadOnly
+    public List<Product> listAllProducts() {
+        return productMapper.listAll();
+    }
+
+    public Product updateProduct(Product product) {
+        int affectedRows = productMapper.updateById(product);
+        if (affectedRows == 0) {
+            throw new IllegalArgumentException("商品不存在");
+        }
+        evictProductCache(product.getId());
+        return productMapper.findById(product.getId());
+    }
+
+    public void evictProductCache(Long id) {
+        if (id == null || id <= 0) {
+            return;
+        }
+        deleteCache(buildProductCacheKey(id));
+    }
+
+    private Product waitForCacheRebuild(String cacheKey, Long id) {
+        for (int attempt = 0; attempt < CACHE_RETRY_TIMES; attempt++) {
+            sleepQuietly(CACHE_RETRY_SLEEP_MILLIS * (attempt + 1));
+            CacheLookupResult cacheLookup = readFromCache(cacheKey);
+            if (cacheLookup.present()) {
+                return cacheLookup.product();
+            }
+        }
+        return loadFromDatabaseAndCache(id, cacheKey);
+    }
+
+    private Product loadFromDatabaseAndCache(Long id, String cacheKey) {
+        Product product = productMapper.findById(id);
+        if (product == null) {
+            cacheNullValue(cacheKey);
+            return null;
+        }
+        cacheProduct(cacheKey, product);
+        return product;
+    }
+
+    private CacheLookupResult readFromCache(String cacheKey) {
+        String cacheValue = getCacheValue(cacheKey);
+        if (cacheValue == null) {
+            return CacheLookupResult.miss();
+        }
+        if (PRODUCT_NULL_VALUE.equals(cacheValue)) {
+            return CacheLookupResult.nullValue();
+        }
         try {
-            lockAcquired = Boolean.TRUE.equals(
-                    redisTemplate.opsForValue().setIfAbsent(lockKey, "1", Duration.ofSeconds(5))
-            );
+            return CacheLookupResult.hit(objectMapper.readValue(cacheValue, Product.class));
+        } catch (JsonProcessingException ignored) {
+            deleteCache(cacheKey);
+            return CacheLookupResult.miss();
+        }
+    }
+
+    private String getCacheValue(String cacheKey) {
+        try {
+            ValueOperations<String, String> ops = redisTemplate.opsForValue();
+            return ops.get(cacheKey);
+        } catch (DataAccessException ignored) {
+            return null;
+        }
+    }
+
+    private void cacheProduct(String cacheKey, Product product) {
+        try {
+            String json = objectMapper.writeValueAsString(product);
+            Duration ttl = PRODUCT_CACHE_TTL.plusSeconds(randomJitter(PRODUCT_CACHE_JITTER_SECONDS));
+            redisTemplate.opsForValue().set(cacheKey, json, ttl);
+        } catch (JsonProcessingException | DataAccessException ignored) {
+        }
+    }
+
+    private void cacheNullValue(String cacheKey) {
+        try {
+            Duration ttl = NULL_CACHE_TTL.plusSeconds(randomJitter(NULL_CACHE_JITTER_SECONDS));
+            redisTemplate.opsForValue().set(cacheKey, PRODUCT_NULL_VALUE, ttl);
         } catch (DataAccessException ignored) {
         }
+    }
 
-        if (lockAcquired) {
-            try {
-                // 双重检查：拿到锁后再次检查缓存，防止重复加载
-                cacheValue = ops.get(cacheKey);
-                if (cacheValue != null) {
-                    if (PRODUCT_NULL_VALUE.equals(cacheValue)) {
-                        return null;
-                    }
-                    try {
-                        return objectMapper.readValue(cacheValue, Product.class);
-                    } catch (JsonProcessingException ignored) {
-                        return null;
-                    }
-                }
+    private boolean tryAcquireLock(String lockKey, String lockValue) {
+        try {
+            return Boolean.TRUE.equals(
+                    redisTemplate.opsForValue().setIfAbsent(lockKey, lockValue, LOCK_TTL)
+            );
+        } catch (DataAccessException ignored) {
+            return false;
+        }
+    }
 
-                // 3. 查数据库
-                Product product = productMapper.findById(id);
-                if (product == null) {
-                    // 缓存穿透：缓存 NULL 值，短过期时间
-                    ops.set(cacheKey, PRODUCT_NULL_VALUE, Duration.ofMinutes(5));
-                    return null;
-                }
+    private void releaseLock(String lockKey, String lockValue) {
+        try {
+            redisTemplate.execute(RELEASE_LOCK_SCRIPT, Collections.singletonList(lockKey), lockValue);
+        } catch (DataAccessException ignored) {
+        }
+    }
 
-                // 4. 正常数据写入缓存
-                // 缓存雪崩：在基础 TTL 上增加随机偏移
-                long baseSeconds = 3600;
-                long randomOffset = random.nextInt(300);
-                Duration ttl = Duration.ofSeconds(baseSeconds + randomOffset);
-                try {
-                    String json = objectMapper.writeValueAsString(product);
-                    ops.set(cacheKey, json, ttl);
-                } catch (JsonProcessingException ignored) {
-                    // 序列化失败则不写缓存，直接返回数据库结果
-                }
+    private void deleteCache(String cacheKey) {
+        try {
+            redisTemplate.delete(cacheKey);
+        } catch (DataAccessException ignored) {
+        }
+    }
 
-                return product;
-            } finally {
-                redisTemplate.delete(lockKey);
-            }
-        } else {
-            // 未获取到锁，稍后重试或直接返回 null，这里简化为短暂睡眠后再查一次缓存
-            try {
-                Thread.sleep(50);
-            } catch (InterruptedException ignored) {
-                Thread.currentThread().interrupt();
-            }
-            cacheValue = ops.get(cacheKey);
-            if (cacheValue == null || PRODUCT_NULL_VALUE.equals(cacheValue)) {
-                return null;
-            }
-            try {
-                return objectMapper.readValue(cacheValue, Product.class);
-            } catch (JsonProcessingException ignored) {
-                return null;
-            }
+    private long randomJitter(long boundSeconds) {
+        return ThreadLocalRandom.current().nextLong(boundSeconds + 1);
+    }
+
+    private void sleepQuietly(long millis) {
+        try {
+            Thread.sleep(millis);
+        } catch (InterruptedException ignored) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private String buildProductCacheKey(Long id) {
+        return PRODUCT_CACHE_KEY_PREFIX + id;
+    }
+
+    private String buildLockKey(Long id) {
+        return PRODUCT_CACHE_LOCK_KEY_PREFIX + id;
+    }
+
+    private record CacheLookupResult(boolean present, Product product) {
+        private static CacheLookupResult miss() {
+            return new CacheLookupResult(false, null);
+        }
+
+        private static CacheLookupResult hit(Product product) {
+            return new CacheLookupResult(true, product);
+        }
+
+        private static CacheLookupResult nullValue() {
+            return new CacheLookupResult(true, null);
         }
     }
 }
-

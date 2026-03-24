@@ -3,10 +3,16 @@ spring:
     name: seckill-user-service
 
   datasource:
-    url: jdbc:mysql://localhost:3306/seckill?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai
-    username: root
-    password: your_password
-    driver-class-name: com.mysql.cj.jdbc.Driver
+    write:
+      url: ${SPRING_DATASOURCE_WRITE_URL:jdbc:mysql://localhost:3306/seckill?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai}
+      username: ${SPRING_DATASOURCE_WRITE_USERNAME:root}
+      password: ${SPRING_DATASOURCE_WRITE_PASSWORD:root}
+      driver-class-name: com.mysql.cj.jdbc.Driver
+    read:
+      url: ${SPRING_DATASOURCE_READ_URL:jdbc:mysql://localhost:3307/seckill?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai}
+      username: ${SPRING_DATASOURCE_READ_USERNAME:root}
+      password: ${SPRING_DATASOURCE_READ_PASSWORD:root}
+      driver-class-name: com.mysql.cj.jdbc.Driver
 
   mvc:
     pathmatch:
@@ -14,20 +20,28 @@ spring:
 
   data:
     redis:
-      host: redis
-      port: 6379
+      host: ${SPRING_DATA_REDIS_HOST:localhost}
+      port: ${SPRING_DATA_REDIS_PORT:6379}
       # 作业环境中使用默认 0 号库
-      database: 0
+      database: ${SPRING_DATA_REDIS_DATABASE:0}
 
 mybatis:
   mapper-locations: classpath:mapper/*.xml
-  type-aliases-package: com.example.seckill.user.domain
+  type-aliases-package: com.example.seckill
+  configuration:
+    map-underscore-to-camel-case: true
+
+seckill:
+  search:
+    es:
+      # 可选项：不启动 ES 时可设为 false（或删除 docker-compose 中的 elasticsearch 服务）
+      enabled: ${SECKILL_SEARCH_ES_ENABLED:true}
+      base-url: ${SECKILL_SEARCH_ES_BASE_URL:http://localhost:9200}
 
 server:
-  port: 8080
+  port: ${SERVER_PORT:8080}
 
 logging:
   level:
     org.springframework.security: warn
     com.example.seckill: info
-

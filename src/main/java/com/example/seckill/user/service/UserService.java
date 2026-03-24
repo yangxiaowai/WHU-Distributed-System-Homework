@@ -4,6 +4,7 @@ import com.example.seckill.user.domain.User;
 import com.example.seckill.user.dto.LoginRequest;
 import com.example.seckill.user.dto.RegisterRequest;
 import com.example.seckill.user.mapper.UserMapper;
+import com.example.seckill.config.datasource.ReadOnly;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
 
@@ -30,6 +31,7 @@ public class UserService {
         userMapper.insert(user);
     }
 
+    @ReadOnly
     public User login(LoginRequest request) {
         User user = userMapper.findByUsername(request.getUsername());
         if (user == null) {
