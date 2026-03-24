@@ -2,6 +2,10 @@ CREATE DATABASE IF NOT EXISTS seckill CHARACTER SET utf8mb4;
 
 USE seckill;
 
+-- Ensure utf8mb4 literal decoding (avoid mojibake when SQL file is parsed)
+SET NAMES utf8mb4;
+SET character_set_client = utf8mb4;
+
 CREATE TABLE IF NOT EXISTS `user` (
     `id` BIGINT PRIMARY KEY AUTO_INCREMENT,
     `username` VARCHAR(50) NOT NULL UNIQUE,

@@ -1,6 +1,6 @@
 services:
   mysql-primary:
-    image: mysql:8.0
+    image: ${DOCKER_IMAGE_PREFIX:-docker.m.daocloud.io}/library/mysql:8.0
     container_name: seckill-mysql-primary
     environment:
       MYSQL_ROOT_PASSWORD: root
@@ -26,7 +26,7 @@ services:
       - seckill-net
 
   mysql-replica:
-    image: mysql:8.0
+    image: ${DOCKER_IMAGE_PREFIX:-docker.m.daocloud.io}/library/mysql:8.0
     container_name: seckill-mysql-replica
     environment:
       MYSQL_ROOT_PASSWORD: root
@@ -42,6 +42,7 @@ services:
       mysql-primary:
         condition: service_healthy
     volumes:
+      - ./sql/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
       - ./mysql/replica/01-setup-replication.sh:/docker-entrypoint-initdb.d/02-setup-replication.sh:ro
     command:
       - --default-authentication-plugin=mysql_native_password
@@ -54,7 +55,7 @@ services:
       - seckill-net
 
   redis:
-    image: redis:7-alpine
+    image: ${DOCKER_IMAGE_PREFIX:-docker.m.daocloud.io}/library/redis:7-alpine
     container_name: seckill-redis
     ports:
       - "6379:6379"
@@ -62,7 +63,10 @@ services:
       - seckill-net
 
   app1:
-    build: .
+    build:
+      context: .
+      args:
+        DOCKER_IMAGE_PREFIX: ${DOCKER_IMAGE_PREFIX:-docker.m.daocloud.io}
     container_name: seckill-app-1
     environment:
       SPRING_DATASOURCE_WRITE_URL: jdbc:mysql://mysql-primary:3306/seckill?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai
@@ -85,7 +89,10 @@ services:
       - seckill-net
 
   app2:
-    build: .
+    build:
+      context: .
+      args:
+        DOCKER_IMAGE_PREFIX: ${DOCKER_IMAGE_PREFIX:-docker.m.daocloud.io}
     container_name: seckill-app-2
     environment:
       SPRING_DATASOURCE_WRITE_URL: jdbc:mysql://mysql-primary:3306/seckill?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai
@@ -108,7 +115,7 @@ services:
       - seckill-net
 
   nginx:
-    image: nginx:1.25-alpine
+    image: ${DOCKER_IMAGE_PREFIX:-docker.m.daocloud.io}/library/nginx:1.25-alpine
     container_name: seckill-nginx
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
@@ -123,7 +130,8 @@ services:
 
   # 可选：商品搜索（Elasticsearch）
   elasticsearch:
-    image: docker.elastic.co/elasticsearch/elasticsearch:8.13.4
+    profiles: ["es"]
+    image: docker.m.daocloud.io/library/elasticsearch:8.13.4
     container_name: seckill-elasticsearch
     environment:
       - discovery.type=single-node

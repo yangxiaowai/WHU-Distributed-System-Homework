@@ -30,7 +30,7 @@ public class ProductController {
     }
 
     @GetMapping("/{id}")
-    public ApiResponse<Product> getProduct(@PathVariable Long id) {
+    public ApiResponse<Product> getProduct(@PathVariable("id") Long id) {
         Product product = productService.getProductById(id);
         if (product == null) {
             return ApiResponse.fail("商品不存在");
@@ -44,7 +44,7 @@ public class ProductController {
     }
 
     @PutMapping("/{id}")
-    public ApiResponse<Product> updateProduct(@PathVariable Long id,
+    public ApiResponse<Product> updateProduct(@PathVariable("id") Long id,
                                               @Valid @RequestBody UpdateProductRequest request) {
         Product product = new Product();
         product.setId(id);
@@ -56,7 +56,7 @@ public class ProductController {
     }
 
     @DeleteMapping("/{id}/cache")
-    public ApiResponse<Void> evictProductCache(@PathVariable Long id) {
+    public ApiResponse<Void> evictProductCache(@PathVariable("id") Long id) {
         productService.evictProductCache(id);
         return ApiResponse.success();
     }

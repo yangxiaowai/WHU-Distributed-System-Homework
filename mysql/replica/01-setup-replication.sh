@@ -1,4 +1,4 @@
-#!/usr/bin/env sh
+#!/bin/sh
 set -eu
 
 echo "[replica-init] waiting for mysql-primary..."

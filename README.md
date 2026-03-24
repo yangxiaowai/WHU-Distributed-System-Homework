@@ -46,6 +46,18 @@ Browser
 docker compose up -d --build
 ```
 
+项目默认已启用国内镜像加速：
+
+- Docker 镜像前缀默认：`docker.m.daocloud.io`
+- Maven 依赖仓库默认：`https://maven.aliyun.com/repository/public`
+
+如需切换 Docker 镜像代理，可在启动前设置：
+
+```bash
+export DOCKER_IMAGE_PREFIX=docker.m.daocloud.io
+docker compose up -d --build
+```
+
 启动后默认暴露端口：
 
 - `80`：Nginx 统一入口
@@ -72,6 +84,14 @@ mvn spring-boot:run \
 
 ```bash
 -Dseckill.search.es.enabled=false
+```
+
+## 可选：启动 Elasticsearch
+
+Elasticsearch 是可选项。若你希望把它也启动起来（让 `/api/products/search` 可用），请执行：
+
+```bash
+docker compose --profile es up -d
 ```
 
 ## 作业验收步骤
