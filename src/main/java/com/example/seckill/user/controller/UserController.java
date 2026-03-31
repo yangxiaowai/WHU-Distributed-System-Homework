@@ -5,7 +5,10 @@ import com.example.seckill.user.dto.LoginRequest;
 import com.example.seckill.user.dto.RegisterRequest;
 import com.example.seckill.user.service.UserService;
 import jakarta.validation.Valid;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -21,9 +24,8 @@ public class UserController {
     }
 
     @PostMapping("/register")
-    public ApiResponse<Void> register(@Valid @RequestBody RegisterRequest request) {
-        userService.register(request);
-        return ApiResponse.success();
+    public ApiResponse<Long> register(@Valid @RequestBody RegisterRequest request) {
+        return ApiResponse.success(userService.register(request));
     }
 
     @PostMapping("/login")
@@ -31,6 +33,26 @@ public class UserController {
         User user = userService.login(request);
         String token = "mock-token-for-" + user.getUsername();
         return ApiResponse.success(token);
+    }
+
+    @GetMapping("/{id}")
+    public ApiResponse<User> getUserById(@PathVariable("id") Long id) {
+        User user = userService.getById(id);
+        if (user == null) {
+            return ApiResponse.fail("用户不存在");
+        }
+        user.setPassword(null);
+        return ApiResponse.success(user);
+    }
+
+    @GetMapping("/by-username")
+    public ApiResponse<User> getUserByUsername(@RequestParam("username") String username) {
+        User user = userService.getByUsername(username);
+        if (user == null) {
+            return ApiResponse.fail("用户不存在");
+        }
+        user.setPassword(null);
+        return ApiResponse.success(user);
     }
 
     public static class ApiResponse<T> {
@@ -82,4 +104,3 @@ public class UserController {
         }
     }
 }
-

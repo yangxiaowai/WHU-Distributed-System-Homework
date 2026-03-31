@@ -1,13 +1,16 @@
 # 商品库存与秒杀系统作业
 
-本项目用于完成“分布式软件原理与技术”课程中“高并发读”相关作业。当前代码已经覆盖作业截图中的主要验收点：
+本项目用于完成“分布式软件原理与技术”课程作业，当前已经覆盖截图中的核心验收点：
 
+- Redis 商品详情缓存
+- Redis 库存缓存 + Lua 原子预扣减
+- Kafka 异步创建订单，削峰填谷
+- Snowflake 订单 ID 生成
+- 同一用户同一商品只能秒杀一次
+- 最终库存不超卖、订单数据完整
 - Nginx 负载均衡 + 动静分离
-- Redis 商品详情页缓存
-- 缓存穿透、击穿、雪崩治理
 - MySQL 主从复制 + 代码层读写分离
 - 可选 Elasticsearch 商品搜索
-- JMeter 读场景压测脚本
 
 ## 目录说明
 
@@ -16,11 +19,9 @@
 - `sql/init.sql`：数据库初始化脚本
 - `mysql/`：MySQL 主从复制脚本
 - `nginx/`：Nginx 负载均衡和静态资源
-- `jmeter/`：JMeter 压测脚本
+- `jmeter/`：压测脚本
 
 ## 技术架构
-
-整体部署结构如下：
 
 ```text
 Browser
@@ -31,16 +32,21 @@ Browser
                          |---- MySQL Primary(3306)
                          |---- MySQL Replica(3307)
                          |---- Redis(6379)
+                         |---- Kafka(9092)
                          |---- Elasticsearch(9200, 可选)
 ```
 
-后端使用 Spring Boot + MyBatis 实现，商品读请求默认走从库，写请求默认走主库，商品详情采用 Cache Aside 模式读 Redis。
+核心写链路如下：
+
+1. 秒杀请求先在 Redis 中执行 Lua 脚本，原子完成“查重 + 判断库存 + 预扣减库存”。
+2. 预扣成功后生成 Snowflake 订单号，并把下单消息投递到 Kafka。
+3. Kafka 消费者在本地事务中扣减 MySQL `stock.available` 并写入 `seckill_order`。
+4. 如果事务失败、库存不足或发现重复订单，消费者会补偿 Redis 预占状态并写失败状态。
+5. 客户端可按 `orderId` 或 `userId` 查询订单/排队结果。
 
 ## 启动方式
 
 ### 1. Docker 一键启动
-
-在项目根目录执行：
 
 ```bash
 docker compose up -d --build
@@ -51,25 +57,17 @@ docker compose up -d --build
 - Docker 镜像前缀默认：`docker.m.daocloud.io`
 - Maven 依赖仓库默认：`https://maven.aliyun.com/repository/public`
 
-如需切换 Docker 镜像代理，可在启动前设置：
-
-```bash
-export DOCKER_IMAGE_PREFIX=docker.m.daocloud.io
-docker compose up -d --build
-```
-
-启动后默认暴露端口：
+默认暴露端口：
 
 - `80`：Nginx 统一入口
 - `3306`：MySQL 主库
 - `3307`：MySQL 从库
 - `6379`：Redis
-- `9200`：Elasticsearch
+- `9092`：Kafka
+- `9200`：Elasticsearch（可选）
 - `8081` / `8082`：两个 Spring Boot 实例
 
-### 2. 本地运行后端（可选）
-
-如果你想直接在 IDE 中运行：
+### 2. 本地运行后端
 
 ```bash
 mvn spring-boot:run \
@@ -77,7 +75,14 @@ mvn spring-boot:run \
   -Dspring.datasource.write.url=jdbc:mysql://localhost:3306/seckill?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai \
   -Dspring.datasource.read.url=jdbc:mysql://localhost:3307/seckill?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai \
   -Dspring.data.redis.host=localhost \
+  -Dspring.kafka.bootstrap-servers=localhost:9092 \
   -Dseckill.search.es.base-url=http://localhost:9200"
+```
+
+如果本地没有启动 Kafka，可临时切回同步落单：
+
+```bash
+-Dseckill.order.async-enabled=false
 ```
 
 如果本地没有启动 ES，可额外追加：
@@ -86,23 +91,110 @@ mvn spring-boot:run \
 -Dseckill.search.es.enabled=false
 ```
 
-## 可选：启动 Elasticsearch
-
-Elasticsearch 是可选项。若你希望把它也启动起来（让 `/api/products/search` 可用），请执行：
-
-```bash
-docker compose --profile es up -d
-```
-
 ## 作业验收步骤
 
-### 1. 负载均衡 + 动静分离
+### 1. 注册用户
 
-- 静态首页：`GET http://localhost/`
-- 动态接口：`GET http://localhost/api/products/1`
-- 负载均衡验证：多次请求 `GET http://localhost/api/meta/whoami`
+注册接口现在会直接返回 `userId`，便于秒杀下单验收：
 
-示例：
+```bash
+curl -X POST http://localhost/api/users/register \
+  -H "Content-Type: application/json" \
+  -d '{"username":"alice","password":"123456","phone":"13800000000"}'
+```
+
+示例返回：
+
+```json
+{"code":0,"msg":"success","data":1}
+```
+
+如果要按用户名回查用户：
+
+```bash
+curl "http://localhost/api/users/by-username?username=alice"
+```
+
+### 2. 查看库存
+
+```bash
+curl http://localhost/api/stocks/3
+```
+
+示例返回中：
+
+- `available`：MySQL 当前可用库存
+- `redisAvailable`：Redis 当前缓存库存
+
+### 3. 发起秒杀
+
+```bash
+curl -X POST http://localhost/api/orders/seckill \
+  -H "Content-Type: application/json" \
+  -d '{"userId":1,"productId":3,"amount":1}'
+```
+
+正常情况下立即返回：
+
+```json
+{
+  "code": 0,
+  "msg": "success",
+  "data": {
+    "orderId": 297605529499447296,
+    "orderNo": "297605529499447296",
+    "status": "PENDING",
+    "message": "秒杀请求已受理，订单正在异步创建"
+  }
+}
+```
+
+### 4. 查询订单
+
+按订单 ID 查询：
+
+```bash
+curl http://localhost/api/orders/297605529499447296
+```
+
+按用户 ID 查询：
+
+```bash
+curl "http://localhost/api/orders?userId=1"
+```
+
+消费者成功落库后，订单状态会变为 `CREATED`。
+
+### 5. 验证幂等性
+
+同一用户再次秒杀同一商品：
+
+```bash
+curl -X POST http://localhost/api/orders/seckill \
+  -H "Content-Type: application/json" \
+  -d '{"userId":1,"productId":3,"amount":1}'
+```
+
+接口不会重复创建订单，而是直接返回已有订单状态。
+
+### 6. 验证库存一致性
+
+多次并发请求秒杀库存很小的商品后，执行：
+
+```bash
+curl http://localhost/api/stocks/3
+curl "http://localhost/api/orders?userId=1"
+```
+
+检查点：
+
+- Redis 库存不会被扣成负数
+- MySQL `stock.available` 不会小于 0
+- 每个成功订单都能在 `seckill_order` 表和查询接口中看到
+
+### 7. 读场景验收
+
+#### 7.1 负载均衡
 
 ```bash
 curl http://localhost/api/meta/whoami
@@ -110,134 +202,123 @@ curl http://localhost/api/meta/whoami
 curl http://localhost/api/meta/whoami
 ```
 
-返回中的 `port` 会在 `8081` 和 `8082` 之间切换，说明 Nginx 已经把请求分发到不同实例。
+返回中的 `port` 会在 `8081` / `8082` 之间切换。
 
-### 2. Redis 分布式缓存
-
-商品详情接口：
-
-- `GET /api/products/{id}`：查询商品详情
-- `DELETE /api/products/{id}/cache`：手动清理单个商品缓存
-- `PUT /api/products/{id}`：更新商品信息，并主动删除旧缓存
-
-#### 2.1 缓存命中
+#### 7.2 商品详情缓存
 
 ```bash
 curl http://localhost/api/products/1
 curl http://localhost/api/products/1
 ```
 
-第一次请求会回源数据库并写入 Redis，后续请求直接命中缓存。
+第一次回源数据库，后续请求命中 Redis。
 
-#### 2.2 缓存穿透
+#### 7.3 缓存穿透
 
 ```bash
 curl http://localhost/api/products/999999
 curl http://localhost/api/products/999999
 ```
 
-不存在的商品会写入 `NULL` 占位缓存，避免恶意请求持续穿透数据库。
+不存在的商品会写入空值缓存，避免持续穿透数据库。
 
-#### 2.3 缓存击穿
+#### 7.4 缓存击穿
 
-热点商品详情采用互斥锁 + 双重检查：
+热点商品详情采用互斥锁 + 双重检查，避免大量线程同时打到数据库。
 
-- 只有一个线程能拿到 Redis 锁并回源数据库
-- 其他线程短暂等待后重试读取缓存
-- 如果 Redis 异常，会降级直接查数据库，避免接口整体不可用
+#### 7.5 缓存雪崩
 
-#### 2.4 缓存雪崩
+商品缓存和空值缓存均带随机 TTL 抖动，避免大批 key 同时过期。
 
-缓存写入时会在基础 TTL 上加入随机抖动，避免大量 key 同时过期：
-
-- 正常商品缓存：`30 分钟 + 随机秒数`
-- 空值缓存：`2 分钟 + 随机秒数`
-
-#### 2.5 缓存一致性
-
-更新商品后会主动删除对应详情缓存，下一次读取重新回源并重建缓存：
+#### 7.6 缓存一致性
 
 ```bash
 curl -X PUT http://localhost/api/products/1 \
   -H "Content-Type: application/json" \
   -d '{"name":"测试商品A-更新","description":"更新后用于验证缓存失效","price":29.90,"status":1}'
-
-curl http://localhost/api/products/1
 ```
 
-### 3. MySQL 读写分离
+更新商品后会主动删除详情缓存，下一次读取重新回源。
 
-代码中通过 `@ReadOnly` 注解 + AOP + 动态数据源完成读写路由：
-
-- 写请求默认走主库
-- 标记为 `@ReadOnly` 的查询走从库
-
-验证接口：
-
-- `GET /api/meta/db/write`：强制访问主库，期望 `read_only = 0`
-- `GET /api/meta/db/read`：强制访问从库，期望 `read_only = 1`
+### 8. MySQL 读写分离
 
 ```bash
 curl http://localhost/api/meta/db/write
 curl http://localhost/api/meta/db/read
 ```
 
-也可以结合商品接口观察业务层面的读写路径：
+预期：
 
-- `PUT /api/products/{id}`：写主库
-- `GET /api/products/{id}`：读缓存，缓存未命中时读从库
+- `/api/meta/db/write` 返回 `read_only = 0`
+- `/api/meta/db/read` 返回 `read_only = 1`
 
-### 4. Elasticsearch 商品搜索（可选）
-
-接口如下：
-
-- `GET /api/products/search?q=测试&size=10`
-- `GET /api/products/search/reindex`
-
-验证命令：
+### 9. Elasticsearch 商品搜索（可选）
 
 ```bash
+docker compose --profile es up -d
 curl "http://localhost/api/products/search/reindex"
 curl "http://localhost/api/products/search?q=测试&size=10"
-curl "http://localhost:9200/products/_search?q=name:测试商品"
 ```
-
-如果不需要 ES，可在运行时把 `SECKILL_SEARCH_ES_ENABLED` 设为 `false`。
 
 ## 主要接口
 
-- `POST /api/users/register`：用户注册
+- `POST /api/users/register`：注册用户，返回 `userId`
 - `POST /api/users/login`：用户登录
+- `GET /api/users/{id}`：按用户 ID 查询
+- `GET /api/users/by-username`：按用户名查询
 - `GET /api/products/list`：商品列表
 - `GET /api/products/{id}`：商品详情
 - `PUT /api/products/{id}`：更新商品并清理缓存
-- `DELETE /api/products/{id}/cache`：手动清理缓存
+- `DELETE /api/products/{id}/cache`：手动清理单个商品缓存
+- `GET /api/stocks/{productId}`：查看库存快照
+- `POST /api/stocks/{productId}/sync-cache`：把库存同步到 Redis
+- `POST /api/orders/seckill`：发起秒杀
+- `GET /api/orders/{orderId}`：按订单 ID 查询
+- `GET /api/orders?userId=1`：按用户 ID 查询订单
 - `GET /api/meta/whoami`：查看当前实例
 - `GET /api/meta/db/write`：查看主库元信息
 - `GET /api/meta/db/read`：查看从库元信息
 - `GET /api/products/search`：ES 搜索
 - `GET /api/products/search/reindex`：ES 全量重建索引
 
+## 关键实现说明
+
+### 1. 秒杀写链路
+
+- Redis Lua 脚本保证预扣库存和重复下单检查是原子操作。
+- Kafka 只承接“创建订单”消息，前端请求不会同步阻塞在数据库写入上。
+- 订单创建使用 Snowflake 生成全局唯一订单号，双实例下也不会冲突。
+
+### 2. 幂等性
+
+- Redis `seckill:order:user:{userId}:{productId}` 防止同一用户重复抢购。
+- MySQL `seckill_order` 表上 `UNIQUE(user_id, product_id)` 作为最终兜底。
+- 即使 Redis 丢失状态，数据库唯一约束仍能阻止重复订单。
+
+### 3. 数据一致性
+
+- Redis 先预扣，Kafka 消费者再在事务中扣减 MySQL 库存并写订单。
+- 如果消费者发现库存不足、重复订单或事务失败，会补偿 Redis 预占状态。
+- 这样可以保证最终不会超卖，且订单数据完整可查。
+
+### 4. 高并发读能力
+
+- 商品详情采用 Cache Aside 模式。
+- 通过空值缓存、互斥锁和随机 TTL 分别处理缓存穿透、击穿、雪崩。
+- 商品读请求默认走从库，写请求走主库。
+
 ## 压测
 
-压测文件：`jmeter/seckill-read-loadtest.jmx`
+- 读场景压测文件：`jmeter/seckill-read-loadtest.jmx`
+- 写场景可使用 JMeter / wrk / ApacheBench 对 `POST /api/orders/seckill` 做并发压测
 
-命令行运行：
+命令行执行读压测：
 
 ```bash
 mkdir -p results
 jmeter -n -t jmeter/seckill-read-loadtest.jmx -l results/seckill-read-loadtest.jtl
 ```
 
-建议压测流程：
+## 选做：分库分表
 
-1. 先清理目标商品缓存。
-2. 进行一轮预热请求，让热点商品进入缓存。
-3. 再执行 JMeter 读压测，对比缓存前后的吞吐和响应时间。
-
-## 关键实现说明
-
-- 商品详情缓存使用 Cache Aside 模式，核心代码在 `src/main/java/com/example/seckill/product/service/ProductService.java`
-- 读写分离核心代码在 `src/main/java/com/example/seckill/config/datasource/`
-- 读写分离验证接口在 `src/main/java/com/example/seckill/meta/`
-- 商品搜索实现位于 `src/main/java/com/example/seckill/product/search/`
+分库分表属于截图中的选做项，当前代码未接入 ShardingSphere。`docs/design.md` 中已经补充推荐接入方案，可作为继续扩展的实现蓝图。

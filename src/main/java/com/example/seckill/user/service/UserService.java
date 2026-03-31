@@ -18,7 +18,7 @@ public class UserService {
         this.userMapper = userMapper;
     }
 
-    public void register(RegisterRequest request) {
+    public Long register(RegisterRequest request) {
         User exist = userMapper.findByUsername(request.getUsername());
         if (exist != null) {
             throw new IllegalArgumentException("用户名已存在");
@@ -29,6 +29,7 @@ public class UserService {
         user.setPhone(request.getPhone());
         user.setStatus(1);
         userMapper.insert(user);
+        return user.getId();
     }
 
     @ReadOnly
@@ -42,5 +43,14 @@ public class UserService {
         }
         return user;
     }
-}
 
+    @ReadOnly
+    public User getById(Long id) {
+        return userMapper.findById(id);
+    }
+
+    @ReadOnly
+    public User getByUsername(String username) {
+        return userMapper.findByUsername(username);
+    }
+}

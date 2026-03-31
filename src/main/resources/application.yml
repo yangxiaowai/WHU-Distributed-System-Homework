@@ -24,6 +24,23 @@ spring:
       port: ${SPRING_DATA_REDIS_PORT:6379}
       # 作业环境中使用默认 0 号库
       database: ${SPRING_DATA_REDIS_DATABASE:0}
+  kafka:
+    bootstrap-servers: ${SPRING_KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+      properties:
+        spring.json.add.type.headers: false
+    consumer:
+      group-id: ${SPRING_KAFKA_CONSUMER_GROUP:seckill-order-consumer}
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      properties:
+        spring.json.trusted.packages: com.example.seckill.order.message
+        spring.json.value.default.type: com.example.seckill.order.message.SeckillOrderMessage
+    listener:
+      missing-topics-fatal: false
 
 mybatis:
   mapper-locations: classpath:mapper/*.xml
@@ -37,6 +54,13 @@ seckill:
       # 可选项：不启动 ES 时可设为 false（或删除 docker-compose 中的 elasticsearch 服务）
       enabled: ${SECKILL_SEARCH_ES_ENABLED:true}
       base-url: ${SECKILL_SEARCH_ES_BASE_URL:http://localhost:9200}
+  order:
+    async-enabled: ${SECKILL_ORDER_ASYNC_ENABLED:true}
+    topic: ${SECKILL_ORDER_TOPIC:seckill-order-create}
+    status-ttl-hours: ${SECKILL_ORDER_STATUS_TTL_HOURS:24}
+  id:
+    worker-id: ${SECKILL_ID_WORKER_ID:1}
+    datacenter-id: ${SECKILL_ID_DATACENTER_ID:1}
 
 server:
   port: ${SERVER_PORT:8080}
